@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fragrance Chatbot</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html, body {
+            height: 100%;
+            width: 100%;
+            font-family: Arial, sans-serif;
+            background-color: #f5f5f5;
+            overflow: hidden;
+        }
+
+        .chat-container {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            width: 100%;
+            background-color: white;
+        }
+
+        .chat-header {
+            background-color: #6a1b9a;
+            color: white;
+            padding: 20px;
+            text-align: center;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            z-index: 1000;
+        }
+
+        .chat-header h2 {
+            margin: 0;
+            font-size: 1.5rem;
+        }
+
+        .chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            background-color: #f8f9fa;
+            scroll-behavior: smooth;
+        }
+
+        .message {
+            margin-bottom: 20px;
+            display: flex;
+            flex-direction: column;
+            max-width: 80%;
+        }
+
+        .user-message {
+            align-items: flex-end;
+            margin-left: auto;
+        }
+
+        .bot-message {
+            align-items: flex-start;
+            margin-right: auto;
+        }
+
+        .message-content {
+            padding: 12px 18px;
+            border-radius: 20px;
+            position: relative;
+            font-size: 16px;
+            line-height: 1.5;
+        }
+
+        .user-message .message-content {
+            background-color: #6a1b9a;
+            color: white;
+            border-bottom-right-radius: 5px;
+        }
+
+        .bot-message .message-content {
+            background-color: white;
+            color: #333;
+            border-bottom-left-radius: 5px;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+        }
+
+        .input-container {
+            padding: 20px;
+            background-color: white;
+            border-top: 1px solid #eee;
+            display: flex;
+            align-items: center;
+            box-shadow: 0 -2px 5px rgba(0,0,0,0.05);
+        }
+
+        #message-input {
+            flex: 1;
+            padding: 15px;
+            border: 2px solid #e0e0e0;
+            border-radius: 25px;
+            margin-right: 15px;
+            font-size: 16px;
+            outline: none;
+            transition: border-color 0.3s ease;
+        }
+
+        #message-input:focus {
+            border-color: #6a1b9a;
+        }
+
+        #send-button {
+            padding: 15px 30px;
+            background-color: #6a1b9a;
+            color: white;
+            border: none;
+            border-radius: 25px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background-color 0.3s ease;
+        }
+
+        #send-button:hover {
+            background-color: #7b1fa2;
+        }
+
+        .typing-indicator {
+            background-color: #f0f0f0;
+            padding: 15px 20px;
+            border-radius: 20px;
+            display: none;
+            margin: 10px 20px;
+            width: fit-content;
+        }
+
+        .dot {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            margin-right: 4px;
+            background-color: #90949c;
+            border-radius: 50%;
+            animation: wave 1.3s linear infinite;
+            opacity: 0.6;
+        }
+
+        .dot:nth-child(2) {
+            animation-delay: -1.1s;
+        }
+
+        .dot:nth-child(3) {
+            animation-delay: -0.9s;
+        }
+
+        @keyframes wave {
+            0%, 60%, 100% {
+                transform: translateY(0);
+            }
+            30% {
+                transform: translateY(-4px);
+            }
+        }
+
+        .message-content strong {
+            font-weight: bold;
+        }
+
+        .message-content em {
+            font-style: italic;
+        }
+
+        /* Scrollbar Styling */
+        .chat-messages::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        .chat-messages::-webkit-scrollbar-track {
+            background: #f1f1f1;
+        }
+
+        .chat-messages::-webkit-scrollbar-thumb {
+            background: #888;
+            border-radius: 4px;
+        }
+
+        .chat-messages::-webkit-scrollbar-thumb:hover {
+            background: #555;
+        }
+
+        /* Mobile Responsiveness */
+        @media (max-width: 768px) {
+            .message {
+                max-width: 90%;
+            }
+
+            .input-container {
+                padding: 15px;
+            }
+
+            #message-input {
+                padding: 12px;
+            }
+
+            #send-button {
+                padding: 12px 20px;
+            }
+        }
+
+        /* Message appear animation */
+        .message {
+            animation: fadeIn 0.3s ease-in-out;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        /* Add seen status */
+        .message-status {
+            font-size: 12px;
+            color: #90949c;
+            margin-top: 4px;
+            margin-right: 8px;
+            text-align: right;
+        }
+
+        /* Add timestamp */
+        .message-timestamp {
+            font-size: 11px;
+            color: #90949c;
+            margin-top: 4px;
+            margin-bottom: 8px;
+        }
+
+        .user-message .message-timestamp {
+            text-align: right;
+        }
+
+        /* Add typing preview */
+        .typing-preview {
+            font-size: 12px;
+            color: #90949c;
+            margin: 5px 20px;
+            font-style: italic;
+        }
+    </style>
+</head>
+<body>
+    <div class="chat-container">
+        <div class="chat-header">
+            <h2>Your Personal Fragrance Stylist</h2>
+        </div>
+        <div class="chat-messages" id="chat-messages">
+            <div class="message bot-message">
+                <div class="message-content">
+                    Hey there! 👋 I'm so excited to chat with you today! How's your day going? ✨
+                </div>
+            </div>
+        </div>
+        <div class="typing-indicator" id="typing-indicator">
+            <span class="dot"></span>
+            <span class="dot"></span>
+            <span class="dot"></span>
+        </div>
+        <div class="input-container">
+            <input type="text" id="message-input" placeholder="Type your message here..." onkeypress="handleKeyPress(event)">
+            <button id="send-button" onclick="sendMessage()">Send</button>
+        </div>
+    </div>
+
+    <script>
+        let sessionId = 'user_' + Math.random().toString(36).substr(2, 9);
+        let isTyping = false;
+        let typingTimeout;
+        
+        const API_URL = '/chat';  // Using relative path since both frontend and backend will be on the same domain
+        
+        function formatMessage(message) {
+            message = message.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+            message = message.replace(/\*(.*?)\*/g, '<em>$1</em>');
+            return message;
+        }
+
+        function getTimestamp() {
+            const now = new Date();
+            return now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        }
+        
+        function addMessage(message, isUser) {
+            const chatMessages = document.getElementById('chat-messages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${isUser ? 'user-message' : 'bot-message'}`;
+            
+            const contentDiv = document.createElement('div');
+            contentDiv.className = 'message-content';
+            
+            if (!isUser) {
+                contentDiv.innerHTML = formatMessage(message);
+            } else {
+                contentDiv.textContent = message;
+            }
+            
+            const timestampDiv = document.createElement('div');
+            timestampDiv.className = 'message-timestamp';
+            timestampDiv.textContent = getTimestamp();
+            
+            messageDiv.appendChild(contentDiv);
+            messageDiv.appendChild(timestampDiv);
+            
+            if (isUser) {
+                const statusDiv = document.createElement('div');
+                statusDiv.className = 'message-status';
+                statusDiv.textContent = 'Sent';
+                messageDiv.appendChild(statusDiv);
+            }
+            
+            chatMessages.appendChild(messageDiv);
+            
+            chatMessages.scrollTo({
+                top: chatMessages.scrollHeight,
+                behavior: 'smooth'
+            });
+        }
+
+        function simulateTyping(messageLength) {
+            const minDelay = 1000;
+            const maxDelay = 2500;
+            const baseDelay = Math.min(messageLength * 30, maxDelay);
+            const randomDelay = Math.max(minDelay, baseDelay + (Math.random() * 1000 - 500));
+            return new Promise(resolve => setTimeout(resolve, randomDelay));
+        }
+
+        function showTypingIndicator() {
+            const indicator = document.getElementById('typing-indicator');
+            indicator.style.display = 'block';
+            isTyping = true;
+        }
+
+        function hideTypingIndicator() {
+            const indicator = document.getElementById('typing-indicator');
+            indicator.style.display = 'none';
+            isTyping = false;
+        }
+
+        let lastTypingUpdate = 0;
+        const TYPING_THROTTLE = 2000; // 2 seconds
+
+        function updateTypingPreview() {
+            const now = Date.now();
+            if (now - lastTypingUpdate > TYPING_THROTTLE) {
+                const input = document.getElementById('message-input');
+                const preview = document.getElementById('typing-preview');
+                
+                if (input.value.trim() && !isTyping) {
+                    // Show "User is typing..." to the bot
+                    lastTypingUpdate = now;
+                }
+            }
+        }
+
+        async function sendMessage() {
+            const input = document.getElementById('message-input');
+            const message = input.value.trim();
+            
+            if (message) {
+                addMessage(message, true);
+                input.value = '';
+                
+                showTypingIndicator();
+                
+                try {
+                    const response = await fetch(API_URL, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            session_id: sessionId,
+                            message: message
+                        })
+                    });
+                    
+                    const data = await response.json();
+                    
+                    // Simulate natural typing delay based on message length
+                    await simulateTyping(data.message.length);
+                    
+                    hideTypingIndicator();
+                    
+                    // Add bot response
+                    addMessage(data.message, false);
+
+                    // Update status to "Seen" after a short delay
+                    setTimeout(() => {
+                        const statuses = document.getElementsByClassName('message-status');
+                        if (statuses.length > 0) {
+                            statuses[statuses.length - 1].textContent = 'Seen';
+                        }
+                    }, 1000);
+                } catch (error) {
+                    hideTypingIndicator();
+                    addMessage('Sorry, there was an error processing your message. Please try again.', false);
+                    console.error('Error:', error);
+                }
+            }
+        }
+
+        function handleKeyPress(event) {
+            if (event.key === 'Enter') {
+                sendMessage();
+            } else {
+                updateTypingPreview();
+            }
+        }
+
+        // Focus input on page load
+        document.addEventListener('DOMContentLoaded', () => {
+            document.getElementById('message-input').focus();
+        });
+
+        // Add input event listener for typing preview
+        document.getElementById('message-input').addEventListener('input', updateTypingPreview);
+    </script>
+</body>
+</html> 
