@@ -50,7 +50,10 @@ logger.info("CORS middleware configured")
 openai_api_key = os.getenv("OPENAI_API_KEY")
 if not openai_api_key:
     raise ValueError("OPENAI_API_KEY environment variable is not set")
+
+# Configure OpenAI
 openai.api_key = openai_api_key
+openai.api_base = "https://api.openai.com/v1"  # Explicitly set the API base URL
 logger.info("OpenAI client initialized")
 
 # In-memory storage for sessions with additional context
