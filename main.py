@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Dict, Optional
 import openai
+from openai import OpenAI
 import os
 import json
 from dotenv import load_dotenv
@@ -288,7 +289,8 @@ async def chat(request: ChatRequest):
         
         # Get response from OpenAI
         logger.info("Sending request to OpenAI")
-        response = openai.chat.completions.create(
+        client = OpenAI(api_key=openai_api_key)
+        response = client.chat.completions.create(
             model="gpt-4o-2024-08-06",
             messages=messages_to_send,
             temperature=0.8,
