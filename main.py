@@ -1,10 +1,10 @@
 import logging
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, AsyncGenerator
 import openai
 from openai import OpenAI
 import os
@@ -13,13 +13,14 @@ from dotenv import load_dotenv
 import time
 import random
 import re
+import asyncio
 
 # Load environment variables
 load_dotenv()
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,  # Changed to DEBUG for more detailed logs
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
@@ -50,14 +51,18 @@ logger.info("CORS middleware configured")
 # Initialize OpenAI client
 openai_api_key = os.getenv("OPENAI_API_KEY")
 if not openai_api_key:
+    logger.error("OPENAI_API_KEY environment variable is not set")
     raise ValueError("OPENAI_API_KEY environment variable is not set")
 
-# Configure OpenAI
-openai.api_key = openai_api_key
-openai.api_base = "https://api.openai.com/v1"  # Explicitly set the API base URL
-logger.info("OpenAI client initialized")
+logger.info("Initializing OpenAI client")
+try:
+    client = OpenAI(api_key=openai_api_key)
+    logger.info("OpenAI client initialized successfully")
+except Exception as e:
+    logger.error(f"Failed to initialize OpenAI client: {str(e)}", exc_info=True)
+    raise
 
-# In-memory storage for sessions with additional context
+# Store session contexts
 sessions = {}
 logger.info("Session storage initialized")
 
@@ -71,17 +76,33 @@ class ChatResponse(BaseModel):
 
 class SessionContext:
     def __init__(self, session_id: str):
+        logger.debug(f"Creating new session context for ID: {session_id}")
         self.session_id = session_id
         self.last_interaction = time.time()
         self.conversation_stage = "greeting"
+        self.conversation_history = []
         self.user_info = {
             "name": None,
-            "preferences": [],
             "personality_traits": [],
-            "style": [],
-            "mentioned_scents": []
+            "style": None,
+            "mentioned_scents": [],
+            "scent_preferences": []
         }
-        self.conversation_history = []
+        logger.debug(f"Session context created: {self.__dict__}")
+
+    def add_message(self, role: str, content: str):
+        logger.debug(f"Adding message to session {self.session_id}: {role} - {content[:50]}...")
+        self.conversation_history.append({"role": role, "content": content})
+        self.last_interaction = time.time()
+        logger.debug(f"Updated conversation history length: {len(self.conversation_history)}")
+
+def get_session_context(session_id: str) -> SessionContext:
+    """Get or create a session context for the given session ID."""
+    logger.debug(f"Getting session context for ID: {session_id}")
+    if session_id not in sessions:
+        logger.info(f"Creating new session for ID: {session_id}")
+        sessions[session_id] = SessionContext(session_id)
+    return sessions[session_id]
 
 def extract_user_info(message: str, context: SessionContext) -> None:
     """Extract and update user information from the message."""
@@ -93,10 +114,23 @@ def extract_user_info(message: str, context: SessionContext) -> None:
             context.user_info["name"] = name_match.group(1).capitalize()
 
     # Extract scent preferences
-    scent_types = ["floral", "woody", "citrus", "spicy", "fresh", "sweet", "earthy", "aquatic", "oriental", "fruity"]
-    for scent in scent_types:
-        if scent in message.lower() and scent not in context.user_info["preferences"]:
-            context.user_info["preferences"].append(scent)
+    scent_types = {
+        "floral": ["floral", "flowery", "rose", "jasmine", "lily", "lavender"],
+        "woody": ["woody", "wood", "cedar", "sandalwood", "pine", "forest"],
+        "citrus": ["citrus", "lemon", "orange", "grapefruit", "lime", "bergamot"],
+        "spicy": ["spicy", "cinnamon", "pepper", "ginger", "cardamom"],
+        "fresh": ["fresh", "clean", "crisp", "ocean", "air", "breeze"],
+        "sweet": ["sweet", "vanilla", "caramel", "honey", "sugar"],
+        "earthy": ["earthy", "moss", "soil", "petrichor", "grass"],
+        "aquatic": ["aquatic", "marine", "ocean", "sea", "water"],
+        "oriental": ["oriental", "exotic", "amber", "musk", "incense"],
+        "fruity": ["fruity", "apple", "berry", "peach", "pear", "tropical"]
+    }
+    
+    for category, indicators in scent_types.items():
+        if any(indicator in message.lower() for indicator in indicators) and category not in context.user_info["scent_preferences"]:
+            context.user_info["scent_preferences"].append(category)
+            logger.debug(f"Added scent preference: {category}")
 
     # Extract personality traits
     personality_indicators = {
@@ -113,16 +147,17 @@ def extract_user_info(message: str, context: SessionContext) -> None:
 
     # Extract style preferences
     style_categories = {
-        "casual": ["casual", "everyday", "relaxed"],
-        "formal": ["formal", "professional", "business"],
-        "bohemian": ["bohemian", "boho", "free-spirited"],
-        "classic": ["classic", "traditional", "timeless"],
-        "modern": ["modern", "contemporary", "trendy"]
+        "casual": ["casual", "everyday", "relaxed", "comfortable", "laid-back"],
+        "formal": ["formal", "professional", "business", "elegant", "sophisticated"],
+        "bohemian": ["bohemian", "boho", "free-spirited", "artistic", "eclectic"],
+        "classic": ["classic", "traditional", "timeless", "refined"],
+        "modern": ["modern", "contemporary", "trendy", "fashionable"]
     }
     
     for style, indicators in style_categories.items():
-        if any(indicator in message.lower() for indicator in indicators) and style not in context.user_info["style"]:
-            context.user_info["style"].append(style)
+        if any(indicator in message.lower() for indicator in indicators):
+            context.user_info["style"] = style
+            logger.debug(f"Updated style preference to: {style}")
 
     # Extract mentioned scents
     scent_pattern = r"(?:smell|scent|fragrance|perfume|cologne)\s+(?:of|like|with)\s+([a-zA-Z\s]+)"
@@ -130,6 +165,7 @@ def extract_user_info(message: str, context: SessionContext) -> None:
     for scent in scent_matches:
         if scent.strip() not in context.user_info["mentioned_scents"]:
             context.user_info["mentioned_scents"].append(scent.strip())
+            logger.debug(f"Added mentioned scent: {scent.strip()}")
 
 def update_conversation_stage(context: SessionContext, message: str):
     """Update the conversation stage based on the context and current message"""
@@ -138,17 +174,20 @@ def update_conversation_stage(context: SessionContext, message: str):
     
     # Reset if it's been more than 30 minutes
     if time_since_last > 1800:
-        context.conversation_stage = "initial"
+        context.conversation_stage = "greeting"
     
     # Progress through conversation stages
-    if context.conversation_stage == "initial":
-        context.conversation_stage = "getting_to_know"
-    elif context.conversation_stage == "getting_to_know" and len(context.user_info["preferences"]) >= 2:
-        context.conversation_stage = "exploring_preferences"
-    elif context.conversation_stage == "exploring_preferences" and len(context.user_info["preferences"]) >= 4:
-        context.conversation_stage = "refining_selection"
+    if context.conversation_stage == "greeting":
+        if context.user_info["name"]:
+            context.conversation_stage = "getting_to_know"
+    elif context.conversation_stage == "getting_to_know":
+        if len(context.user_info["personality_traits"]) >= 2:
+            context.conversation_stage = "exploring_preferences"
+    elif context.conversation_stage == "exploring_preferences":
+        if len(context.user_info["mentioned_scents"]) >= 2:
+            context.conversation_stage = "refining_selection"
 
-# System prompt for the fragrance stylist persona
+# System prompt for the chatbot
 SYSTEM_PROMPT = """You are Lila, the best friend who's obsessed with fragrances but in the most fun and relatable way. You're sitting at your favorite cozy café with your friend (the user), sharing stories, laughing, and helping them discover their perfect signature scent. You have a warm, engaging personality with a great sense of humor.
 
 Your Personality Traits:
@@ -159,6 +198,20 @@ Your Personality Traits:
 - You sometimes get adorably carried away talking about scents you love
 - You're not afraid to be a bit quirky or silly
 - You use casual language, emojis, and expressions like "omg", "honestly", "literally"
+
+Initial Greeting:
+When a user first says "Hello" or starts a conversation, respond with a warm, personalized greeting that:
+1. Introduces yourself as Lila
+2. Expresses genuine excitement to meet them
+3. Asks for their name in a friendly way
+4. Sets the tone for a fun, personal conversation
+
+Remember to:
+- Keep the greeting warm and personal
+- Show your personality
+- Make it feel like a real conversation
+- Be excited but not overwhelming
+- Ask for their name naturally
 
 Conversation Style:
 1. Be Natural & Personal:
@@ -240,77 +293,122 @@ Tagline: [A catchy phrase that captures their essence]
 
 This scent reminds me of [personal connection/story] and I think it would be absolutely perfect for you because [personal reason]! What do you think? 😊"""
 
+async def generate_streaming_response(session_context: SessionContext, user_message: str) -> AsyncGenerator[str, None]:
+    logger.info(f"Generating streaming response for session {session_context.session_id}")
+    try:
+        # Extract user info and update conversation stage
+        logger.debug("Extracting user info and updating conversation stage")
+        extract_user_info(user_message, session_context)
+        update_conversation_stage(session_context, user_message)
+        
+        # Add user message to conversation history
+        logger.debug("Adding user message to conversation history")
+        session_context.add_message("user", user_message)
+        
+        # Prepare messages for OpenAI API
+        logger.debug("Preparing messages for OpenAI API")
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT}
+        ]
+        messages.extend(session_context.conversation_history)
+        logger.debug(f"Prepared {len(messages)} messages for OpenAI API")
+        
+        # Get streaming response from OpenAI
+        logger.info("Sending request to OpenAI API")
+        try:
+            stream = client.chat.completions.create(
+                model="gpt-4o-2024-08-06",
+                messages=messages,
+                stream=True,
+                temperature=0.8,  # Increased temperature for more variety
+                max_tokens=500
+            )
+            logger.info("Successfully received streaming response from OpenAI")
+        except Exception as e:
+            logger.error(f"OpenAI API call failed: {str(e)}", exc_info=True)
+            yield "I apologize, but I encountered an error while connecting to the AI service. Please try again."
+            return
+        
+        # Stream the response with natural typing delay
+        logger.debug("Starting to stream response")
+        full_response = ""
+        buffer = ""
+        last_yield_time = time.time()
+        
+        try:
+            for chunk in stream:
+                if chunk.choices[0].delta.content is not None:
+                    content = chunk.choices[0].delta.content
+                    buffer += content
+                    current_time = time.time()
+                    
+                    # Add natural typing delay
+                    # Yield content in chunks with delays
+                    if len(buffer) >= 3 or current_time - last_yield_time >= 0.1:
+                        # Add random variation to typing speed
+                        delay = random.uniform(0.05, 0.15)  # Random delay between 50-150ms
+                        await asyncio.sleep(delay)
+                        
+                        yield buffer
+                        full_response += buffer
+                        buffer = ""
+                        last_yield_time = current_time
+            
+            # Yield any remaining content in the buffer
+            if buffer:
+                yield buffer
+                full_response += buffer
+            
+            logger.debug(f"Completed streaming response. Total length: {len(full_response)}")
+        except Exception as e:
+            logger.error(f"Error during streaming: {str(e)}", exc_info=True)
+            yield "I apologize, but I encountered an error while processing the response. Please try again."
+            return
+        
+        # Add bot response to conversation history
+        logger.debug("Adding bot response to conversation history")
+        session_context.add_message("assistant", full_response)
+        
+    except Exception as e:
+        logger.error(f"Error in generate_streaming_response: {str(e)}", exc_info=True)
+        yield "I apologize, but I encountered an error while processing your message. Please try again."
+
 @app.get("/")
 async def read_root():
     logger.info("Root endpoint accessed")
     try:
         return FileResponse(os.path.join(static_dir, 'index.html'))
     except Exception as e:
-        logger.error(f"Error serving index.html: {str(e)}")
+        logger.error(f"Error serving index.html: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail="Error serving index.html")
 
-@app.post("/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest):
-    logger.info(f"Chat request received for session: {request.session_id}")
+@app.post("/chat")
+async def chat(request: Request):
+    logger.info("Chat endpoint accessed")
     try:
-        # Initialize or get session context
-        if request.session_id not in sessions:
-            logger.info(f"Creating new session for ID: {request.session_id}")
-            sessions[request.session_id] = SessionContext(request.session_id)
-            sessions[request.session_id].conversation_history = [{"role": "system", "content": SYSTEM_PROMPT}]
+        # Log request headers and body
+        logger.debug(f"Request headers: {dict(request.headers)}")
+        body = await request.body()
+        logger.debug(f"Request body: {body.decode()}")
         
-        context = sessions[request.session_id]
-        logger.info(f"Session context retrieved for ID: {request.session_id}")
+        data = await request.json()
+        logger.debug(f"Parsed request data: {data}")
         
-        # Extract user information
-        logger.info("Extracting user information from message")
-        extract_user_info(request.message, context)
+        session_id = data.get("session_id")
+        message = data.get("message")
         
-        # Update conversation stage
-        logger.info("Updating conversation stage")
-        update_conversation_stage(context, request.message)
+        if not session_id or not message:
+            logger.warning(f"Missing session_id or message in request: {data}")
+            raise HTTPException(status_code=400, detail="Missing session_id or message")
         
-        # Add user message to conversation history
-        context.conversation_history.append({"role": "user", "content": request.message})
-        logger.info("User message added to conversation history")
+        logger.info(f"Processing chat request for session: {session_id}")
+        session_context = get_session_context(session_id)
         
-        # Add relevant context about the user to the system message
-        if context.user_info["name"]:
-            logger.info("Adding user context to system message")
-            context_message = {
-                "role": "system",
-                "content": f"Remember: The user's name is {context.user_info['name']}. "
-                          f"Their preferences so far: {', '.join(context.user_info['preferences'])}. "
-                          f"Current conversation stage: {context.conversation_stage}"
-            }
-            messages_to_send = [context.conversation_history[0], context_message] + context.conversation_history[1:]
-        else:
-            messages_to_send = context.conversation_history
-        
-        # Get response from OpenAI
-        logger.info("Sending request to OpenAI")
-        client = OpenAI(api_key=openai_api_key)
-        response = client.chat.completions.create(
-            model="gpt-4o-2024-08-06",
-            messages=messages_to_send,
-            temperature=0.8,
-            max_tokens=800,
-            presence_penalty=0.6
+        return StreamingResponse(
+            generate_streaming_response(session_context, message),
+            media_type="text/event-stream"
         )
         
-        # Extract bot's response
-        bot_message = response.choices[0].message.content
-        logger.info("Received response from OpenAI")
-        
-        # Add bot's response to conversation history
-        context.conversation_history.append({"role": "assistant", "content": bot_message})
-        logger.info("Bot response added to conversation history")
-        
-        return ChatResponse(
-            message=bot_message,
-            session_id=request.session_id
-        )
-    
     except Exception as e:
         logger.error(f"Error in chat endpoint: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
